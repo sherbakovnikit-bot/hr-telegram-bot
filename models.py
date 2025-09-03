@@ -1,0 +1,121 @@
+from enum import Enum, auto
+
+class OnboardingState(Enum):
+    POSITION = auto()
+    AWAIT_OTHER_POSITION = auto()
+    IMPRESSION = auto()
+    INTEREST_RATING = auto()
+    INTEREST_REASON = auto()
+
+class OnboardingFollowupState(Enum):
+    AWAITING_STATUS = auto()
+    AWAITING_LEAVING_REASON = auto()
+    AWAITING_FURTHER_REASON = auto()
+
+class ExitState(Enum):
+    RESTAURANT = auto()
+    POSITION = auto()
+    DURATION = auto()
+    LEADERSHIP = auto()
+    TRAINING = auto()
+    FEEDBACK = auto()
+    AWAITING_REASON = auto()
+    AWAITING_IMPROVEMENT = auto()
+    AWAITING_COMMENTS = auto()
+
+class ClimateState(Enum):
+    AWAIT_EMPLOYMENT_STATUS = auto()
+    RESTAURANT = auto()
+    GENDER = auto()
+    POSITION = auto()
+    RECOMMEND = auto()
+    RECOMMEND_REASON = auto()
+    EXPECTATIONS = auto()
+    BEST_ABILITY = auto()
+    PRAISE = auto()
+    DEVELOPMENT_CARE = auto()
+    OPINION = auto()
+    COLLEAGUE_SUCCESS = auto()
+    MISSION = auto()
+    IMPORTANCE = auto()
+    GROWTH_OPPORTUNITY = auto()
+    SUPPORT = auto()
+    FRIENDS = auto()
+    TEAM_PART = auto()
+
+class RecruitmentState(Enum):
+    FULL_NAME = auto()
+    AGE = auto()
+    FAMILY_INFO = auto()
+    VACANCY_SOURCE = auto()
+    AWAIT_MULTI_VACANCY = auto()
+    AWAIT_OTHER_VACANCY = auto()
+    REASON_FOR_CHOICE = auto()
+    AWAIT_MULTI_RESTAURANT = auto()
+    KNOWS_MARCELLIS = auto()
+    NIGHT_SHIFTS = auto()
+    WEEKLY_SHIFTS = auto()
+    MOBILE_PHONE = auto()
+    SOCIAL_LINK = auto()
+    CITY = auto()
+    ADDRESS = auto()
+    AWAIT_CHECKPOINT_1 = auto()
+    MARITAL_STATUS = auto()
+    CHILDREN = auto()
+    HEALTH_ASSESSMENT = auto()
+    ATTITUDE_TO_APPEARANCE = auto()
+    EDUCATION_NAME = auto()
+    GRADUATION_YEAR = auto()
+    COURSE = auto()
+    EDUCATION_FORM = auto()
+    AWAIT_ADDITIONAL_COURSES_DECISION = auto()
+    ADDITIONAL_COURSES = auto()
+    EXPERIENCE_DURATION = auto()
+    AWAIT_EXPERIENCE_DETAILS = auto()
+    EXPECTED_INCOME = auto()
+    REASON_FOR_LEAVING = auto()
+    PREVIOUS_JOBS_COUNT = auto()
+    AWAIT_CHECKPOINT_2 = auto()
+    ATTITUDE_TO_SPORT = auto()
+    LIFE_VALUES = auto()
+    LIFE_WEAKNESSES = auto()
+    LIFE_GOAL = auto()
+    READING_NOW = auto()
+    JUDGED_BEFORE = auto()
+
+class ManagerRegistrationState(Enum):
+    CHOOSE_RESTAURANT = auto()
+    AWAIT_FULL_NAME = auto()
+
+class AdminState(Enum):
+    MENU = auto()
+    MANAGE_MANAGERS = auto()
+    MANAGE_EMPLOYEES = auto()
+    CHOOSE_EMPLOYEE_RESTAURANT = auto()
+    LIST_EMPLOYEES_PAGINATED = auto()
+    AWAIT_REMOVAL_ID = auto()
+    CHOOSE_ADD_RESTAURANT = auto()
+    AWAIT_ADD_ID = auto()
+    BROADCAST_CONFIRM = auto()
+
+class FeedbackState(Enum):
+    AWAITING_FEEDBACK = auto()
+
+class ManagerFeedbackState(Enum):
+    AWAITING_DECISION = auto()
+    AWAITING_REASON = auto()
+    AWAITING_SHIFT_DATE = auto()
+    AWAITING_MANUAL_SHIFT_DATE = auto()
+    AWAITING_SHIFT_TIME = auto()
+    AWAITING_COMMENT = auto()
+
+class CandidateFeedbackState(Enum):
+    AWAITING_IMPRESSION = auto()
+    AWAITING_CONDITIONS_MET = auto()
+    AWAITING_REQUIREMENTS_CLEAR = auto()
+    AWAITING_ADDITIONAL_COMMENTS = auto()
+
+class MainMenuState(Enum):
+    MAIN = auto()
+    AWAITING_FEEDBACK_CHOICE = auto()
+    ADMIN_PANEL = auto()
