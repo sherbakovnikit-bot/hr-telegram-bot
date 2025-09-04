@@ -70,11 +70,9 @@ stop_event = asyncio.Event()
 
 
 async def cleanup_bot_data(context: ContextTypes.DEFAULT_TYPE):
-    """Periodically cleans up old data from bot_data."""
     now = time.time()
     bot_data = context.bot_data
     cleanup_count = 0
-    # Cleanup candidate_check_info (older than 30 days)
     if 'candidate_check_info' in bot_data:
         thirty_days_ago = now - timedelta(days=30).total_seconds()
         keys_to_delete = [
@@ -118,7 +116,6 @@ async def post_init(application: Application):
     background_tasks.add(http_server_task)
     http_server_task.add_done_callback(background_tasks.discard)
 
-    # Schedule the periodic cleanup task
     if application.job_queue:
         application.job_queue.run_repeating(
             cleanup_bot_data,
@@ -215,15 +212,19 @@ async def main() -> None:
     application.add_handler(chat_member_handler)
     application.add_handler(quit_clarification_handler)
 
+    application.add_handler(recruitment_conversation_handler)
+    application.add_handler(onboarding_conversation_handler)
     application.add_handler(candidate_feedback_conversation_handler)
     application.add_handler(onboarding_followup_conversation_handler)
     application.add_handler(manager_registration_handler)
     application.add_handler(climate_survey_conversation_handler)
     application.add_handler(exit_interview_conversation_handler)
+    application.add_handler(feedback_submission_handler)
 
     admin_conversation_handler = ConversationHandler(
         entry_points=[
             CommandHandler("start", admin_panel_start, filters=filters.User(user_id=settings.ADMIN_IDS)),
+            CommandHandler("admin", admin_panel_start, filters=filters.User(user_id=settings.ADMIN_IDS)),
             CallbackQueryHandler(admin_panel_start, pattern=f"^{settings.CALLBACK_ADMIN_BACK}$")
         ],
         states={
@@ -231,7 +232,6 @@ async def main() -> None:
                 CallbackQueryHandler(manage_managers_start, pattern="admin_manage_managers"),
                 CallbackQueryHandler(manage_employees_start, pattern="admin_manage_employees"),
                 CallbackQueryHandler(admin_list_pending_candidates, pattern="admin_pending_candidates"),
-                CallbackQueryHandler(list_managers, pattern="admin_list_managers"),
                 CallbackQueryHandler(broadcast_climate_start, pattern="admin_broadcast_climate_start"),
                 CallbackQueryHandler(show_stats, pattern="admin_stats"),
             ],
@@ -281,11 +281,12 @@ async def main() -> None:
 
     main_conversation_handler = ConversationHandler(
         entry_points=[
-            recruitment_conversation_handler,
-            onboarding_conversation_handler,
             CommandHandler("start", start, filters=~filters.User(user_id=settings.ADMIN_IDS)),
             CommandHandler("feedback", start_feedback),
             CallbackQueryHandler(start, pattern=f"^{settings.CALLBACK_GO_TO_MAIN_MENU}$"),
+            MessageHandler(
+                filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE & ~filters.User(user_id=settings.ADMIN_IDS),
+                start_feedback),
         ],
         states={
             MainMenuState.MAIN: [
@@ -332,13 +333,15 @@ async def main() -> None:
     )
 
     application.add_handler(admin_conversation_handler)
-    application.add_handler(feedback_submission_handler)
     application.add_handler(main_conversation_handler)
     application.add_error_handler(error_handler)
+
     logger.info("Starting bot polling...")
+
     await application.initialize()
     await application.start()
     await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+
     while True:
         await asyncio.sleep(3600)
 
