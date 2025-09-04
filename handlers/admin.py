@@ -208,7 +208,7 @@ async def add_restaurant_chosen(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data['admin_add_res_name'] = next((n for n, c in RESTAURANT_OPTIONS if c == query.data), "?")
     text = (f"Ресторан: «{context.user_data['admin_add_res_name']}».\n\n"
             f"<b>Шаг 2:</b> Перешлите сообщение, введите ID или @username.\n\n"
-            f"<i><small>Примечание: поиск по @username сработает, только если пользователь ранее уже запускал бота.</small></i>")
+            f"<i><code>Примечание: поиск по @username сработает, только если пользователь ранее уже запускал бота.</code></i>")
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("⬅️ Назад к выбору ресторана", callback_data="admin_add_manager_start")],
