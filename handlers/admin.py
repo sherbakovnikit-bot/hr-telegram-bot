@@ -150,8 +150,14 @@ async def list_managers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> A
     query = update.callback_query
     await safe_answer_callback_query(query)
     await edit_admin_message(query, "Загрузка...", None)
-    await edit_admin_message(query, await get_manager_info_text(), get_back_to_admin_menu_keyboard())
-    return AdminState.MENU
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage_managers")],
+        [InlineKeyboardButton("❌ Главное меню", callback_data=settings.CALLBACK_ADMIN_BACK)]
+    ])
+
+    await edit_admin_message(query, await get_manager_info_text(), keyboard)
+    return AdminState.MANAGE_MANAGERS
 
 
 async def remove_manager_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AdminState:
@@ -172,7 +178,6 @@ async def remove_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
                                                  callback_data=f"admin_remove_mgr_{manager['user_id']}_{res_code_suffix}")])
     buttons.append([
         InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage_managers"),
-        InlineKeyboardButton("❌ Отмена", callback_data=settings.CALLBACK_ADMIN_BACK)
     ])
     await edit_admin_message(query, "Выберите менеджера для удаления:", InlineKeyboardMarkup(buttons))
     return AdminState.AWAIT_REMOVAL_ID
@@ -195,7 +200,6 @@ async def add_manager_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                    in range(0, len(RESTAURANT_OPTIONS), 2)]
     button_rows.append([
         InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage_managers"),
-        InlineKeyboardButton("❌ Отмена", callback_data=settings.CALLBACK_ADMIN_BACK)
     ])
     await edit_admin_message(query, "Шаг 1: Выберите ресторан:", InlineKeyboardMarkup(button_rows))
     return AdminState.CHOOSE_ADD_RESTAURANT
@@ -208,39 +212,47 @@ async def add_restaurant_chosen(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data['admin_add_res_name'] = next((n for n, c in RESTAURANT_OPTIONS if c == query.data), "?")
     text = (f"Ресторан: «{context.user_data['admin_add_res_name']}».\n\n"
             f"<b>Шаг 2:</b> Перешлите сообщение, введите ID или @username.\n\n"
-            f"<i><code>Примечание: поиск по @username сработает, только если пользователь ранее уже запускал бота.</code></i>")
+            f"<i>Примечание: поиск по @username сработает, только если пользователь ранее уже запускал бота.</i>")
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("⬅️ Назад к выбору ресторана", callback_data="admin_add_manager_start")],
-        [InlineKeyboardButton("❌ Отмена", callback_data=settings.CALLBACK_ADMIN_BACK)]
     ])
     await edit_admin_message(query, text, keyboard)
     return AdminState.AWAIT_ADD_ID
 
 
-async def add_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AdminState:
+async def add_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await send_or_edit_message(update, context, "Загрузка...")
+
     user_id_to_add = await get_id_from_input(update, context)
     if update.message: await update.message.delete()
     if user_id_to_add is None: return AdminState.AWAIT_ADD_ID
+
     res_code = context.user_data.get('admin_add_res_code')
     res_name = context.user_data.get('admin_add_res_name')
+
     if not res_code:
         await send_or_edit_message(update, context, "Ошибка.", get_back_to_admin_menu_keyboard())
         return await admin_panel_start(update, context)
+
     if await database.is_manager_in_restaurant(user_id_to_add, res_code):
         await send_or_edit_message(update, context, f"⚠️ Пользователь уже менеджер.", get_back_to_admin_menu_keyboard())
-        return AdminState.MANAGE_MANAGERS
+        return ConversationHandler.END
+
     try:
         user_chat = await context.bot.get_chat(user_id_to_add)
         full_name = f"{user_chat.first_name or ''} {user_chat.last_name or ''}".strip() or "N/A"
         await database.add_manager(user_id_to_add, res_code, full_name, user_chat.username)
         await set_user_commands(user_id_to_add, context.bot)
         text = f"✅ <b>{html.escape(full_name)}</b> добавлен в менеджеры «{res_name}»."
-        await send_or_edit_message(update, context, text, get_back_to_admin_menu_keyboard())
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("⬅️ Назад в меню", callback_data=settings.CALLBACK_ADMIN_BACK)]])
+        await send_or_edit_message(update, context, text, keyboard)
         logger.info(f"Admin {update.effective_user.id} added manager {user_id_to_add} to {res_code}")
     except (BadRequest, Forbidden) as e:
         await send_or_edit_message(update, context, f"Ошибка: не удалось найти пользователя {user_id_to_add}. {e}",
                                    get_back_to_admin_menu_keyboard())
+
     context.user_data.clear()
     return AdminState.MENU
 
