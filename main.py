@@ -163,7 +163,7 @@ async def reason_received(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return ConversationHandler.END
 
 
-def main() -> None:
+async def main() -> None:
     logger.info("--- Bot Starting Up ---")
 
     if os.path.exists(settings.PID_FILE):
@@ -336,8 +336,17 @@ def main() -> None:
     application.add_handler(main_conversation_handler)
     application.add_error_handler(error_handler)
     logger.info("Starting bot polling...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    while True:
+        await asyncio.sleep(3600)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot stopped by user or system.")
+    except Exception as e:
+        logger.critical(f"Bot failed to run due to an unhandled exception: {e}", exc_info=True)
