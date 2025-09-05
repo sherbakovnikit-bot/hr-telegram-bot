@@ -27,7 +27,6 @@ from utils.helpers import (
 from utils.keyboards import (
     RESTAURANT_OPTIONS,
     get_admin_menu_keyboard,
-    get_back_to_admin_menu_keyboard,
 )
 
 logger = logging.getLogger(__name__)
@@ -151,7 +150,6 @@ async def list_managers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> A
     query = update.callback_query
     await safe_answer_callback_query(query)
     await edit_admin_message(query, "Загрузка...", None)
-
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage_managers")]
     ])
@@ -165,6 +163,7 @@ async def remove_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
     await edit_admin_message(query, "Загрузка...", None)
     managers_map = await database.get_all_managers_by_restaurant()
     if not managers_map:
+        await query.answer("Список менеджеров пуст.", show_alert=True)
         return await manage_managers_start(update, context)
 
     buttons = []
@@ -264,7 +263,7 @@ async def add_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return AdminState.MENU
 
 
-async def _get_pending_candidates_content() -> tuple[str, InlineKeyboardMarkup]:
+async def _get_pending_candidates_content(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup]:
     pending_tasks = await database.get_all_pending_feedback()
     if not pending_tasks:
         keyboard = InlineKeyboardMarkup(
@@ -274,6 +273,8 @@ async def _get_pending_candidates_content() -> tuple[str, InlineKeyboardMarkup]:
     candidates_by_restaurant = defaultdict(list)
     for task in pending_tasks:
         candidates_by_restaurant[task['restaurant_name']].append(task)
+
+    context.application.bot_data['admin_pending_tasks'] = {task['id']: task for task in pending_tasks}
 
     text_parts = ["<b>Кандидаты на рассмотрении:</b>\nВыберите кандидата, чтобы выполнить действие."]
     buttons = []
@@ -290,9 +291,9 @@ async def _get_pending_candidates_content() -> tuple[str, InlineKeyboardMarkup]:
 async def admin_list_pending_candidates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await safe_answer_callback_query(query)
-    text, keyboard = await _get_pending_candidates_content()
+    text, keyboard = await _get_pending_candidates_content(context)
     await edit_admin_message(query, text, keyboard)
-    return MainMenuState.AWAITING_FEEDBACK_CHOICE
+    return AdminState.AWAIT_CANDIDATE_ACTION
 
 
 async def handle_candidate_action_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -300,7 +301,9 @@ async def handle_candidate_action_menu(update: Update, context: ContextTypes.DEF
     await safe_answer_callback_query(query)
     feedback_id = query.data.replace("cand_act_", "")
 
-    task = await database.get_pending_feedback_by_id(feedback_id)
+    all_tasks = context.application.bot_data.get('admin_pending_tasks', {})
+    task = all_tasks.get(feedback_id)
+
     if not task:
         await query.answer("Задача этого кандидата уже неактуальна.", show_alert=True)
         return await admin_list_pending_candidates(update, context)
@@ -314,23 +317,27 @@ async def handle_candidate_action_menu(update: Update, context: ContextTypes.DEF
         [InlineKeyboardButton("⬅️ Назад к списку", callback_data="admin_pending_candidates")]
     ])
     await edit_admin_message(query, text, keyboard)
-    return MainMenuState.AWAITING_FEEDBACK_CHOICE
+    return AdminState.AWAIT_CANDIDATE_ACTION
 
 
 async def handle_admin_delete_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await safe_answer_callback_query(query)
     feedback_id = query.data.replace("cand_del_", "")
-    candidate_id = await database.get_candidate_id_from_feedback_id(feedback_id)
-    if not candidate_id:
-        await query.answer("Кандидат не найден.", show_alert=True)
-        return MainMenuState.AWAITING_FEEDBACK_CHOICE
 
+    all_tasks = context.application.bot_data.get('admin_pending_tasks', {})
+    task = all_tasks.get(feedback_id)
+
+    if not task or 'candidate_id' not in task['job_data']:
+        await query.answer("Кандидат не найден.", show_alert=True)
+        return AdminState.AWAIT_CANDIDATE_ACTION
+
+    candidate_id = task['job_data']['candidate_id']
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Да, удалить", callback_data=f"cand_del_confirm_{candidate_id}")],
         [InlineKeyboardButton("❌ Отмена", callback_data="admin_pending_candidates")]])
     await edit_admin_message(query, f"Удалить кандидата ID {candidate_id}?", keyboard)
-    return MainMenuState.AWAITING_FEEDBACK_CHOICE
+    return AdminState.AWAIT_CANDIDATE_ACTION
 
 
 async def handle_admin_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -346,7 +353,6 @@ async def handle_admin_delete_confirmation(update: Update, context: ContextTypes
 
     logger.info(f"Admin {query.from_user.id} deleted feedback for candidate {candidate_id}.")
     await query.answer("Кандидат удален и перемещен в архив.", show_alert=True)
-
     await admin_list_pending_candidates(update, context)
 
 

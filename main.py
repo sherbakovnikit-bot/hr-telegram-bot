@@ -107,20 +107,6 @@ async def post_init(application: Application):
         background_tasks.add(writer_task)
         writer_task.add_done_callback(background_tasks.discard)
 
-    heartbeat_task = loop.create_task(
-        monitoring.heartbeat_task(application, stop_event, application.bot_data)
-    )
-    background_tasks.add(heartbeat_task)
-    heartbeat_task.add_done_callback(background_tasks.discard)
-
-    http_app = web.Application()
-    http_app.router.add_get("/ping", monitoring.handle_http_ping)
-    http_server_task = loop.create_task(
-        monitoring.start_http_server(http_app, stop_event)
-    )
-    background_tasks.add(http_server_task)
-    http_server_task.add_done_callback(background_tasks.discard)
-
     if application.job_queue:
         application.job_queue.run_repeating(
             cleanup_bot_data,
@@ -167,23 +153,6 @@ async def reason_received(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def main() -> None:
     logger.info("--- Bot Starting Up ---")
-
-    if os.path.exists(settings.PID_FILE):
-        try:
-            with open(settings.PID_FILE, 'r') as f:
-                old_pid = int(f.read().strip())
-            if psutil.pid_exists(old_pid):
-                logger.warning(
-                    f"Stale PID file found for a running process {old_pid}. Monitor should handle it. Continuing...")
-            else:
-                logger.warning(f"Stale PID file found for a dead process. Removing {settings.PID_FILE}.")
-                os.remove(settings.PID_FILE)
-        except (ValueError, OSError) as e:
-            logger.error(f"Error handling stale PID file: {e}. Removing it.")
-            try:
-                os.remove(settings.PID_FILE)
-            except OSError:
-                pass
 
     await database.init_db()
     logger.info("Database initialization complete.")
@@ -274,6 +243,11 @@ async def main() -> None:
                 CallbackQueryHandler(handle_broadcast_confirmation,
                                      pattern=f"^(admin_broadcast_confirm|admin_broadcast_cancel)$"),
             ],
+            AdminState.AWAIT_CANDIDATE_ACTION: [
+                CallbackQueryHandler(handle_candidate_action_menu, pattern="^cand_act_"),
+                CallbackQueryHandler(handle_admin_delete_candidate, pattern="^cand_del_"),
+                CallbackQueryHandler(admin_list_pending_candidates, pattern="admin_pending_candidates")
+            ]
         },
         fallbacks=[
             CommandHandler("cancel", cancel),
@@ -299,12 +273,8 @@ async def main() -> None:
                 CallbackQueryHandler(start, pattern="^main_menu$"),
             ],
             MainMenuState.AWAITING_FEEDBACK_CHOICE: [
-                CallbackQueryHandler(handle_candidate_action_menu, pattern="^cand_act_"),
                 CallbackQueryHandler(handle_feedback_candidate_selection, pattern="^fb_"),
-                CallbackQueryHandler(handle_admin_delete_candidate, pattern="^cand_del_"),
-                CallbackQueryHandler(admin_list_pending_candidates, pattern="admin_pending_candidates"),
                 CallbackQueryHandler(start, pattern="^main_menu$"),
-                CallbackQueryHandler(admin_panel_start, pattern="^admin_back_to_menu$"),
             ],
             FeedbackState.AWAITING_FEEDBACK: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, receive_and_forward_feedback)
