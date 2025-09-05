@@ -97,6 +97,7 @@ class AdminState(Enum):
     CHOOSE_ADD_RESTAURANT = auto()
     AWAIT_ADD_ID = auto()
     BROADCAST_CONFIRM = auto()
+    AWAIT_CANDIDATE_ACTION = auto()
 
 class FeedbackState(Enum):
     AWAITING_FEEDBACK = auto()
