@@ -90,24 +90,29 @@ async def cleanup_bot_data(context: ContextTypes.DEFAULT_TYPE):
 async def post_init(application: Application):
     global background_tasks, stop_event
     application.bot_data.setdefault("last_telegram_update_ts", time.time())
-    await database.init_db()
+
     if not all([settings.TOKEN, settings.GOOGLE_CREDENTIALS_JSON, settings.SPREADSHEET_ID, settings.ADMIN_IDS]):
         logger.critical("CRITICAL ERROR: One or more required environment variables are missing or invalid.")
+
     agc_manager = await g_sheets.init_google_sheets_client()
     if not agc_manager:
         logger.warning("Google Sheets client failed to initialize. Recording to sheets is disabled.")
+
     loop = asyncio.get_running_loop()
+
     if agc_manager:
         writer_task = loop.create_task(
             g_sheets.batch_writer_task(application, stop_event, agc_manager, application.bot_data)
         )
         background_tasks.add(writer_task)
         writer_task.add_done_callback(background_tasks.discard)
+
     heartbeat_task = loop.create_task(
         monitoring.heartbeat_task(application, stop_event, application.bot_data)
     )
     background_tasks.add(heartbeat_task)
     heartbeat_task.add_done_callback(background_tasks.discard)
+
     http_app = web.Application()
     http_app.router.add_get("/ping", monitoring.handle_http_ping)
     http_server_task = loop.create_task(
@@ -179,6 +184,9 @@ async def main() -> None:
                 os.remove(settings.PID_FILE)
             except OSError:
                 pass
+
+    await database.init_db()
+    logger.info("Database initialization complete.")
 
     try:
         pid = os.getpid()
