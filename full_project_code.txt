@@ -210,6 +210,7 @@ class AdminState(Enum):
     CHOOSE_ADD_RESTAURANT = auto()
     AWAIT_ADD_ID = auto()
     BROADCAST_CONFIRM = auto()
+    AWAIT_CANDIDATE_ACTION = auto()
 
 class FeedbackState(Enum):
     AWAITING_FEEDBACK = auto()
@@ -317,6 +318,67 @@ while True:
     time.sleep(1)
 
 logger.info("Watchdog has been shut down.")
+
+--- FILE: requirements.txt ---
+aiohappyeyeballs==2.6.1
+aiohttp==3.12.13
+aiosignal==1.3.2
+aiosqlite==0.21.0
+anyio==4.8.0
+APScheduler==3.11.0
+attrs==25.3.0
+cachetools==5.5.1
+certifi==2025.7.14
+charset-normalizer==3.4.1
+class-registry==2.1.2
+filters==1.3.2
+frozenlist==1.7.0
+google-api-core==2.25.1
+google-api-python-client==2.176.0
+google-auth==2.38.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.1
+googleapis-common-protos==1.70.0
+gspread==6.0.2
+gspread_asyncio==2.0.0
+h11==0.14.0
+httpcore==1.0.7
+httplib2==0.22.0
+httpx==0.28.1
+idna==3.10
+multidict==6.4.4
+numpy==2.2.2
+oauthlib==3.2.2
+pandas==2.2.3
+propcache==0.3.2
+proto-plus==1.26.1
+protobuf==6.31.1
+psutil==7.0.0
+pyasn1==0.6.1
+pyasn1_modules==0.4.1
+pyparsing==3.2.3
+pytest-win32consoletitle==0.1.2
+python-dateutil==2.9.0.post0
+python-dotenv==1.1.0
+python-telegram-bot==22.0
+pytz==2025.1
+regex==2024.11.6
+requests==2.32.3
+requests-oauthlib==2.0.0
+rsa==4.9
+six==1.17.0
+sniffio==1.3.1
+StrEnum==0.4.15
+tenacity==9.0.0
+typing_extensions==4.12.2
+tzdata==2025.1
+tzlocal==5.3
+uritemplate==4.2.0
+urllib3==2.3.0
+watchdog==5.0.3
+Win32Security==2.1.0
+yarl==1.20.1
+
 
 --- FILE: package_project.py ---
 import os
@@ -477,11 +539,9 @@ stop_event = asyncio.Event()
 
 
 async def cleanup_bot_data(context: ContextTypes.DEFAULT_TYPE):
-    """Periodically cleans up old data from bot_data."""
     now = time.time()
     bot_data = context.bot_data
     cleanup_count = 0
-    # Cleanup candidate_check_info (older than 30 days)
     if 'candidate_check_info' in bot_data:
         thirty_days_ago = now - timedelta(days=30).total_seconds()
         keys_to_delete = [
@@ -499,33 +559,23 @@ async def cleanup_bot_data(context: ContextTypes.DEFAULT_TYPE):
 async def post_init(application: Application):
     global background_tasks, stop_event
     application.bot_data.setdefault("last_telegram_update_ts", time.time())
-    await database.init_db()
+
     if not all([settings.TOKEN, settings.GOOGLE_CREDENTIALS_JSON, settings.SPREADSHEET_ID, settings.ADMIN_IDS]):
         logger.critical("CRITICAL ERROR: One or more required environment variables are missing or invalid.")
+
     agc_manager = await g_sheets.init_google_sheets_client()
     if not agc_manager:
         logger.warning("Google Sheets client failed to initialize. Recording to sheets is disabled.")
+
     loop = asyncio.get_running_loop()
+
     if agc_manager:
         writer_task = loop.create_task(
             g_sheets.batch_writer_task(application, stop_event, agc_manager, application.bot_data)
         )
         background_tasks.add(writer_task)
         writer_task.add_done_callback(background_tasks.discard)
-    heartbeat_task = loop.create_task(
-        monitoring.heartbeat_task(application, stop_event, application.bot_data)
-    )
-    background_tasks.add(heartbeat_task)
-    heartbeat_task.add_done_callback(background_tasks.discard)
-    http_app = web.Application()
-    http_app.router.add_get("/ping", monitoring.handle_http_ping)
-    http_server_task = loop.create_task(
-        monitoring.start_http_server(http_app, stop_event)
-    )
-    background_tasks.add(http_server_task)
-    http_server_task.add_done_callback(background_tasks.discard)
 
-    # Schedule the periodic cleanup task
     if application.job_queue:
         application.job_queue.run_repeating(
             cleanup_bot_data,
@@ -570,25 +620,11 @@ async def reason_received(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     return ConversationHandler.END
 
 
-def main() -> None:
+async def main() -> None:
     logger.info("--- Bot Starting Up ---")
 
-    # Check for stale PID file
-    if os.path.exists(settings.PID_FILE):
-        try:
-            with open(settings.PID_FILE, 'r') as f:
-                old_pid = int(f.read().strip())
-            if psutil.pid_exists(old_pid):
-                logger.warning(f"Stale PID file found for a running process {old_pid}. Monitor should handle it. Continuing...")
-            else:
-                logger.warning(f"Stale PID file found for a dead process. Removing {settings.PID_FILE}.")
-                os.remove(settings.PID_FILE)
-        except (ValueError, OSError) as e:
-            logger.error(f"Error handling stale PID file: {e}. Removing it.")
-            try:
-                os.remove(settings.PID_FILE)
-            except OSError:
-                pass
+    await database.init_db()
+    logger.info("Database initialization complete.")
 
     try:
         pid = os.getpid()
@@ -611,7 +647,6 @@ def main() -> None:
         .build()
     )
 
-    # --- START: Standalone Handlers (not part of conversations) ---
     application.add_handler(TypeHandler(Update, update_timestamp_handler), group=-1)
     application.add_handler(
         CallbackQueryHandler(handle_manager_approval,
@@ -619,46 +654,42 @@ def main() -> None:
     )
     application.add_handler(CallbackQueryHandler(show_full_recruitment_report, pattern=f"^show_full_report_"))
     application.add_handler(CallbackQueryHandler(send_candidate_check_info, pattern=f"^check_candidate_"))
-    # --- THIS IS THE FIX: Move deletion handler to be standalone ---
     application.add_handler(CallbackQueryHandler(handle_admin_delete_confirmation, pattern="^cand_del_confirm_"))
     application.add_handler(chat_member_handler)
     application.add_handler(quit_clarification_handler)
-    # --- END: Standalone Handlers ---
 
-
+    application.add_handler(recruitment_conversation_handler)
+    application.add_handler(onboarding_conversation_handler)
     application.add_handler(candidate_feedback_conversation_handler)
     application.add_handler(onboarding_followup_conversation_handler)
     application.add_handler(manager_registration_handler)
     application.add_handler(climate_survey_conversation_handler)
     application.add_handler(exit_interview_conversation_handler)
+    application.add_handler(feedback_submission_handler)
 
-    main_conversation_handler = ConversationHandler(
+    admin_conversation_handler = ConversationHandler(
         entry_points=[
-            recruitment_conversation_handler,
-            onboarding_conversation_handler,
-            CommandHandler("start", start),
-            CommandHandler("feedback", start_feedback),
-            CallbackQueryHandler(start, pattern=f"^{settings.CALLBACK_GO_TO_MAIN_MENU}$"),
+            CommandHandler("start", admin_panel_start, filters=filters.User(user_id=settings.ADMIN_IDS)),
+            CommandHandler("admin", admin_panel_start, filters=filters.User(user_id=settings.ADMIN_IDS)),
+            CallbackQueryHandler(admin_panel_start, pattern=f"^{settings.CALLBACK_ADMIN_BACK}$")
         ],
         states={
             AdminState.MENU: [
                 CallbackQueryHandler(manage_managers_start, pattern="admin_manage_managers"),
                 CallbackQueryHandler(manage_employees_start, pattern="admin_manage_employees"),
                 CallbackQueryHandler(admin_list_pending_candidates, pattern="admin_pending_candidates"),
-                CallbackQueryHandler(list_managers, pattern="admin_list_managers"),
                 CallbackQueryHandler(broadcast_climate_start, pattern="admin_broadcast_climate_start"),
                 CallbackQueryHandler(show_stats, pattern="admin_stats"),
-                CallbackQueryHandler(admin_panel_start, pattern="admin_back_to_menu"),
             ],
             AdminState.MANAGE_MANAGERS: [
                 CallbackQueryHandler(add_manager_start, pattern="admin_add_manager_start"),
                 CallbackQueryHandler(remove_manager_start, pattern="admin_remove_manager_start"),
                 CallbackQueryHandler(list_managers, pattern="admin_list_managers"),
-                CallbackQueryHandler(admin_panel_start, pattern="admin_back_to_menu"),
+                CallbackQueryHandler(admin_panel_start, pattern=settings.CALLBACK_ADMIN_BACK),
             ],
             AdminState.CHOOSE_EMPLOYEE_RESTAURANT: [
                 CallbackQueryHandler(show_employees_paginated, pattern="^list_emp_res_"),
-                CallbackQueryHandler(admin_panel_start, pattern="admin_back_to_menu"),
+                CallbackQueryHandler(admin_panel_start, pattern=settings.CALLBACK_ADMIN_BACK),
             ],
             AdminState.LIST_EMPLOYEES_PAGINATED: [
                 CallbackQueryHandler(toggle_employee_status_handler, pattern="^adm_tgl_emp_"),
@@ -671,28 +702,48 @@ def main() -> None:
             ],
             AdminState.AWAIT_ADD_ID: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND | filters.FORWARDED, add_id_received),
-                CallbackQueryHandler(manage_managers_start, pattern="admin_manage_managers")
+                CallbackQueryHandler(add_manager_start, pattern="admin_add_manager_start"),
             ],
             AdminState.AWAIT_REMOVAL_ID: [
                 CallbackQueryHandler(remove_manager_selected, pattern="^admin_remove_mgr_"),
-                CallbackQueryHandler(manage_managers_start, pattern="admin_manage_managers")
+                CallbackQueryHandler(manage_managers_start, pattern="admin_manage_managers"),
             ],
             AdminState.BROADCAST_CONFIRM: [
                 CallbackQueryHandler(handle_broadcast_confirmation,
                                      pattern=f"^(admin_broadcast_confirm|admin_broadcast_cancel)$"),
             ],
+            AdminState.AWAIT_CANDIDATE_ACTION: [
+                CallbackQueryHandler(handle_candidate_action_menu, pattern="^cand_act_"),
+                CallbackQueryHandler(handle_admin_delete_candidate, pattern="^cand_del_"),
+                CallbackQueryHandler(admin_list_pending_candidates, pattern="admin_pending_candidates")
+            ]
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CommandHandler("start", admin_panel_start, filters=filters.User(user_id=settings.ADMIN_IDS))
+        ],
+        persistent=True,
+        name="admin_conv",
+        per_message=False,
+    )
+
+    main_conversation_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("start", start, filters=~filters.User(user_id=settings.ADMIN_IDS)),
+            CommandHandler("feedback", start_feedback),
+            CallbackQueryHandler(start, pattern=f"^{settings.CALLBACK_GO_TO_MAIN_MENU}$"),
+            MessageHandler(
+                filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE & ~filters.User(user_id=settings.ADMIN_IDS),
+                start_feedback),
+        ],
+        states={
             MainMenuState.MAIN: [
                 CallbackQueryHandler(handle_manager_feedback_button, pattern="^manager_feedback$"),
                 CallbackQueryHandler(start, pattern="^main_menu$"),
             ],
             MainMenuState.AWAITING_FEEDBACK_CHOICE: [
-                CallbackQueryHandler(handle_candidate_action_menu, pattern="^cand_act_"),
                 CallbackQueryHandler(handle_feedback_candidate_selection, pattern="^fb_"),
-                CallbackQueryHandler(handle_admin_delete_candidate, pattern="^cand_del_"),
-                # The confirmation handler is now removed from here
-                CallbackQueryHandler(admin_list_pending_candidates, pattern="admin_pending_candidates"),
                 CallbackQueryHandler(start, pattern="^main_menu$"),
-                CallbackQueryHandler(admin_panel_start, pattern="^admin_back_to_menu$"),
             ],
             FeedbackState.AWAITING_FEEDBACK: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, receive_and_forward_feedback)
@@ -716,27 +767,45 @@ def main() -> None:
                 CommandHandler("skip", skip_comment),
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("start", start)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CommandHandler("start", start, filters=~filters.User(user_id=settings.ADMIN_IDS))
+        ],
         persistent=True,
         name="main_conversation_handler",
         per_message=False,
     )
 
-    application.add_handler(feedback_submission_handler)
+    application.add_handler(admin_conversation_handler)
     application.add_handler(main_conversation_handler)
     application.add_error_handler(error_handler)
+
     logger.info("Starting bot polling...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+
+    await stop_event.wait()
+
+    await application.updater.stop()
+    await application.stop()
+    await application.shutdown()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot stopped by user or system.")
+    except Exception as e:
+        logger.critical(f"Bot failed to run due to an unhandled exception: {e}", exc_info=True)
 
 --- FILE: ping.txt ---
-1756925199.010858
+1756994692.770977
 
 --- FILE: heartbeat.txt ---
-1756925224.9164858
+1756994730.699946
 
 --- FILE: core/g_sheets.py ---
 import asyncio
@@ -2971,10 +3040,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if not user:
         return ConversationHandler.END
 
-    # Проверяем, не находится ли пользователь уже в другом важном диалоге
     active_conv_names = [
         'recruitment_conv', 'onboarding_conv', 'exit_interview_conv',
-        'climate_survey_conv', 'manager_reg_conv'
+        'climate_survey_conv', 'manager_reg_conv', 'admin_conv'
     ]
     current_conversations = context.user_data.get('conversations', {})
     is_in_another_conv = any(current_conversations.get(name) is not None for name in active_conv_names)
@@ -2993,19 +3061,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await set_user_commands(user.id, context.bot)
         await add_user_to_interacted(user.id, context)
 
-        is_admin = user.id in settings.ADMIN_IDS
         is_manager = await database.is_user_a_manager(user.id)
 
         if update.callback_query:
             await safe_answer_callback_query(update.callback_query)
 
-        if is_admin:
-            return await admin_panel_start(update, context)
-
         if is_manager:
             return await show_manager_menu(update, context)
 
-        # Для обычного пользователя показываем приветствие, а не начинаем сбор ОС
         await context.bot.send_sticker(chat_id=user.id, sticker=stickers.get_random_greeting())
         await update.effective_message.reply_text(
             "Ciao! 👋 Я бот-помощник команды «Марчеллис».\n\n"
@@ -4125,6 +4188,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     MessageHandler,
     filters,
+    ConversationHandler
 )
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden
@@ -4141,7 +4205,6 @@ from utils.helpers import (
 from utils.keyboards import (
     RESTAURANT_OPTIONS,
     get_admin_menu_keyboard,
-    get_back_to_admin_menu_keyboard,
 )
 
 logger = logging.getLogger(__name__)
@@ -4265,8 +4328,11 @@ async def list_managers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> A
     query = update.callback_query
     await safe_answer_callback_query(query)
     await edit_admin_message(query, "Загрузка...", None)
-    await edit_admin_message(query, await get_manager_info_text(), get_back_to_admin_menu_keyboard())
-    return AdminState.MENU
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage_managers")]
+    ])
+    await edit_admin_message(query, await get_manager_info_text(), keyboard)
+    return AdminState.MANAGE_MANAGERS
 
 
 async def remove_manager_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AdminState:
@@ -4275,8 +4341,9 @@ async def remove_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
     await edit_admin_message(query, "Загрузка...", None)
     managers_map = await database.get_all_managers_by_restaurant()
     if not managers_map:
-        await edit_admin_message(query, "Список менеджеров пуст.", get_back_to_admin_menu_keyboard())
-        return AdminState.MANAGE_MANAGERS
+        await query.answer("Список менеджеров пуст.", show_alert=True)
+        return await manage_managers_start(update, context)
+
     buttons = []
     for res_code_suffix, managers in sorted(managers_map.items()):
         res_name = next((name for name, code in RESTAURANT_OPTIONS if code.endswith(res_code_suffix)), res_code_suffix)
@@ -4285,7 +4352,9 @@ async def remove_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
             button_text = f"❌ {html.escape(user_mention)} ({html.escape(res_name)})"
             buttons.append([InlineKeyboardButton(button_text,
                                                  callback_data=f"admin_remove_mgr_{manager['user_id']}_{res_code_suffix}")])
-    buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage_managers")])
+    buttons.append([
+        InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage_managers"),
+    ])
     await edit_admin_message(query, "Выберите менеджера для удаления:", InlineKeyboardMarkup(buttons))
     return AdminState.AWAIT_REMOVAL_ID
 
@@ -4305,7 +4374,9 @@ async def add_manager_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await safe_answer_callback_query(query)
     button_rows = [[InlineKeyboardButton(text, callback_data=data) for text, data in RESTAURANT_OPTIONS[i:i + 2]] for i
                    in range(0, len(RESTAURANT_OPTIONS), 2)]
-    button_rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage_managers")])
+    button_rows.append([
+        InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage_managers"),
+    ])
     await edit_admin_message(query, "Шаг 1: Выберите ресторан:", InlineKeyboardMarkup(button_rows))
     return AdminState.CHOOSE_ADD_RESTAURANT
 
@@ -4317,49 +4388,71 @@ async def add_restaurant_chosen(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data['admin_add_res_name'] = next((n for n, c in RESTAURANT_OPTIONS if c == query.data), "?")
     text = (f"Ресторан: «{context.user_data['admin_add_res_name']}».\n\n"
             f"<b>Шаг 2:</b> Перешлите сообщение, введите ID или @username.\n\n"
-            f"<i><small>Примечание: поиск по @username сработает, только если пользователь ранее уже запускал бота.</small></i>")
+            f"<i>Примечание: поиск по @username сработает, только если пользователь ранее уже запускал бота.</i>")
 
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage_managers")]])
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Назад к выбору ресторана", callback_data="admin_add_manager_start")],
+    ])
     await edit_admin_message(query, text, keyboard)
     return AdminState.AWAIT_ADD_ID
 
 
-async def add_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AdminState:
+async def add_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await send_or_edit_message(update, context, "Загрузка...")
+
     user_id_to_add = await get_id_from_input(update, context)
-    if update.message: await update.message.delete()
-    if user_id_to_add is None: return AdminState.AWAIT_ADD_ID
+
+    if update.message:
+        try:
+            await update.message.delete()
+        except (BadRequest, Forbidden):
+            pass
+
+    if user_id_to_add is None:
+        return AdminState.AWAIT_ADD_ID
+
     res_code = context.user_data.get('admin_add_res_code')
     res_name = context.user_data.get('admin_add_res_name')
+
     if not res_code:
-        await send_or_edit_message(update, context, "Ошибка.", get_back_to_admin_menu_keyboard())
-        return await admin_panel_start(update, context)
+        await admin_panel_start(update, context)
+        return ConversationHandler.END
+
     if await database.is_manager_in_restaurant(user_id_to_add, res_code):
-        await send_or_edit_message(update, context, f"⚠️ Пользователь уже менеджер.", get_back_to_admin_menu_keyboard())
-        return AdminState.MANAGE_MANAGERS
+        await send_or_edit_message(update, context, "⚠️ Пользователь уже является менеджером этого ресторана.",
+                                   get_back_to_admin_menu_keyboard())
+        return AdminState.MENU
+
     try:
         user_chat = await context.bot.get_chat(user_id_to_add)
-        full_name = f"{user_chat.first_name or ''} {user_chat.last_name or ''}".strip() or "N/A"
+        full_name = f"{user_chat.first_name or ''} {user_chat.last_name or ''}".strip() or "Имя не получено"
         await database.add_manager(user_id_to_add, res_code, full_name, user_chat.username)
         await set_user_commands(user_id_to_add, context.bot)
         text = f"✅ <b>{html.escape(full_name)}</b> добавлен в менеджеры «{res_name}»."
-        await send_or_edit_message(update, context, text, get_back_to_admin_menu_keyboard())
-        logger.info(f"Admin {update.effective_user.id} added manager {user_id_to_add} to {res_code}")
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("⬅️ Назад в меню", callback_data=settings.CALLBACK_ADMIN_BACK)]])
+        await send_or_edit_message(update, context, text, keyboard)
+        logger.info(f"Admin {update.effective_user.id} добавил менеджера {user_id_to_add} в ресторан {res_code}")
     except (BadRequest, Forbidden) as e:
         await send_or_edit_message(update, context, f"Ошибка: не удалось найти пользователя {user_id_to_add}. {e}",
                                    get_back_to_admin_menu_keyboard())
+
     context.user_data.clear()
     return AdminState.MENU
 
 
-async def _get_pending_candidates_content() -> tuple[str, InlineKeyboardMarkup]:
+async def _get_pending_candidates_content(context: ContextTypes.DEFAULT_TYPE) -> tuple[str, InlineKeyboardMarkup]:
     pending_tasks = await database.get_all_pending_feedback()
     if not pending_tasks:
-        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="admin_back_to_menu")]])
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("⬅️ Назад", callback_data=settings.CALLBACK_ADMIN_BACK)]])
         return "Нет кандидатов на рассмотрении.", keyboard
 
     candidates_by_restaurant = defaultdict(list)
     for task in pending_tasks:
         candidates_by_restaurant[task['restaurant_name']].append(task)
+
+    context.application.bot_data['admin_pending_tasks'] = {task['id']: task for task in pending_tasks}
 
     text_parts = ["<b>Кандидаты на рассмотрении:</b>\nВыберите кандидата, чтобы выполнить действие."]
     buttons = []
@@ -4369,16 +4462,16 @@ async def _get_pending_candidates_content() -> tuple[str, InlineKeyboardMarkup]:
             button = InlineKeyboardButton(f"👤 {candidate['name']}", callback_data=f"cand_act_{candidate['id']}")
             buttons.append([button])
 
-    buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="admin_back_to_menu")])
+    buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data=settings.CALLBACK_ADMIN_BACK)])
     return "\n".join(text_parts), InlineKeyboardMarkup(buttons)
 
 
 async def admin_list_pending_candidates(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await safe_answer_callback_query(query)
-    text, keyboard = await _get_pending_candidates_content()
+    text, keyboard = await _get_pending_candidates_content(context)
     await edit_admin_message(query, text, keyboard)
-    return MainMenuState.AWAITING_FEEDBACK_CHOICE
+    return AdminState.AWAIT_CANDIDATE_ACTION
 
 
 async def handle_candidate_action_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -4386,7 +4479,9 @@ async def handle_candidate_action_menu(update: Update, context: ContextTypes.DEF
     await safe_answer_callback_query(query)
     feedback_id = query.data.replace("cand_act_", "")
 
-    task = await database.get_pending_feedback_by_id(feedback_id)
+    all_tasks = context.application.bot_data.get('admin_pending_tasks', {})
+    task = all_tasks.get(feedback_id)
+
     if not task:
         await query.answer("Задача этого кандидата уже неактуальна.", show_alert=True)
         return await admin_list_pending_candidates(update, context)
@@ -4400,23 +4495,27 @@ async def handle_candidate_action_menu(update: Update, context: ContextTypes.DEF
         [InlineKeyboardButton("⬅️ Назад к списку", callback_data="admin_pending_candidates")]
     ])
     await edit_admin_message(query, text, keyboard)
-    return MainMenuState.AWAITING_FEEDBACK_CHOICE
+    return AdminState.AWAIT_CANDIDATE_ACTION
 
 
 async def handle_admin_delete_candidate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await safe_answer_callback_query(query)
     feedback_id = query.data.replace("cand_del_", "")
-    candidate_id = await database.get_candidate_id_from_feedback_id(feedback_id)
-    if not candidate_id:
-        await query.answer("Кандидат не найден.", show_alert=True)
-        return MainMenuState.AWAITING_FEEDBACK_CHOICE
 
+    all_tasks = context.application.bot_data.get('admin_pending_tasks', {})
+    task = all_tasks.get(feedback_id)
+
+    if not task or 'candidate_id' not in task['job_data']:
+        await query.answer("Кандидат не найден.", show_alert=True)
+        return AdminState.AWAIT_CANDIDATE_ACTION
+
+    candidate_id = task['job_data']['candidate_id']
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Да, удалить", callback_data=f"cand_del_confirm_{candidate_id}")],
         [InlineKeyboardButton("❌ Отмена", callback_data="admin_pending_candidates")]])
     await edit_admin_message(query, f"Удалить кандидата ID {candidate_id}?", keyboard)
-    return MainMenuState.AWAITING_FEEDBACK_CHOICE
+    return AdminState.AWAIT_CANDIDATE_ACTION
 
 
 async def handle_admin_delete_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -4432,7 +4531,6 @@ async def handle_admin_delete_confirmation(update: Update, context: ContextTypes
 
     logger.info(f"Admin {query.from_user.id} deleted feedback for candidate {candidate_id}.")
     await query.answer("Кандидат удален и перемещен в архив.", show_alert=True)
-
     await admin_list_pending_candidates(update, context)
 
 

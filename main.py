@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 import time
-import psutil
 from datetime import timedelta
 
 from telegram import Update
@@ -19,11 +18,11 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-from aiohttp import web
 
 from models import AdminState, MainMenuState, FeedbackState, ManagerFeedbackState
-from core import settings, database, g_sheets, monitoring
+from core import settings, database, g_sheets
 from core.logging_config import setup_logging
+from core.monitoring import heartbeat_task
 from handlers.common import error_handler, update_timestamp_handler, cancel
 from handlers.recruitment import recruitment_conversation_handler, show_full_recruitment_report, \
     send_candidate_check_info
@@ -107,6 +106,12 @@ async def post_init(application: Application):
         background_tasks.add(writer_task)
         writer_task.add_done_callback(background_tasks.discard)
 
+    heartbeat_bg_task = loop.create_task(
+        heartbeat_task(application, stop_event, application.bot_data)
+    )
+    background_tasks.add(heartbeat_bg_task)
+    heartbeat_bg_task.add_done_callback(background_tasks.discard)
+
     if application.job_queue:
         application.job_queue.run_repeating(
             cleanup_bot_data,
@@ -135,12 +140,6 @@ async def on_shutdown(application: Application):
         except asyncio.CancelledError:
             logger.info("Gather was cancelled, this is expected.")
         background_tasks.clear()
-    if os.path.exists(settings.PID_FILE):
-        try:
-            os.remove(settings.PID_FILE)
-            logger.info(f"PID file {settings.PID_FILE} removed.")
-        except OSError:
-            pass
     logger.info("--- Bot shutdown complete ---")
 
 
@@ -156,15 +155,7 @@ async def main() -> None:
 
     await database.init_db()
     logger.info("Database initialization complete.")
-
-    try:
-        pid = os.getpid()
-        with open(settings.PID_FILE, "w") as f:
-            f.write(str(pid))
-        logger.info(f"Bot process started with PID: {pid}.")
-    except Exception as e:
-        logger.critical(f"Could not write PID file '{settings.PID_FILE}': {e}.")
-        return
+    logger.info(f"Bot process started with PID: {os.getpid()}.")
 
     persistence = PicklePersistence(filepath=settings.PERSISTENCE_FILE)
     application = (
