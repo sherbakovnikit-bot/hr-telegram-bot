@@ -10,6 +10,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     MessageHandler,
     filters,
+    ConversationHandler
 )
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, Forbidden
@@ -152,10 +153,8 @@ async def list_managers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> A
     await edit_admin_message(query, "Загрузка...", None)
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage_managers")],
-        [InlineKeyboardButton("❌ Главное меню", callback_data=settings.CALLBACK_ADMIN_BACK)]
+        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage_managers")]
     ])
-
     await edit_admin_message(query, await get_manager_info_text(), keyboard)
     return AdminState.MANAGE_MANAGERS
 
@@ -166,8 +165,8 @@ async def remove_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
     await edit_admin_message(query, "Загрузка...", None)
     managers_map = await database.get_all_managers_by_restaurant()
     if not managers_map:
-        await edit_admin_message(query, "Список менеджеров пуст.", get_back_to_admin_menu_keyboard())
-        return AdminState.MANAGE_MANAGERS
+        return await manage_managers_start(update, context)
+
     buttons = []
     for res_code_suffix, managers in sorted(managers_map.items()):
         res_name = next((name for name, code in RESTAURANT_OPTIONS if code.endswith(res_code_suffix)), res_code_suffix)
@@ -225,30 +224,38 @@ async def add_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await send_or_edit_message(update, context, "Загрузка...")
 
     user_id_to_add = await get_id_from_input(update, context)
-    if update.message: await update.message.delete()
-    if user_id_to_add is None: return AdminState.AWAIT_ADD_ID
+
+    if update.message:
+        try:
+            await update.message.delete()
+        except (BadRequest, Forbidden):
+            pass
+
+    if user_id_to_add is None:
+        return AdminState.AWAIT_ADD_ID
 
     res_code = context.user_data.get('admin_add_res_code')
     res_name = context.user_data.get('admin_add_res_name')
 
     if not res_code:
-        await send_or_edit_message(update, context, "Ошибка.", get_back_to_admin_menu_keyboard())
-        return await admin_panel_start(update, context)
+        await admin_panel_start(update, context)
+        return ConversationHandler.END
 
     if await database.is_manager_in_restaurant(user_id_to_add, res_code):
-        await send_or_edit_message(update, context, f"⚠️ Пользователь уже менеджер.", get_back_to_admin_menu_keyboard())
-        return ConversationHandler.END
+        await send_or_edit_message(update, context, "⚠️ Пользователь уже является менеджером этого ресторана.",
+                                   get_back_to_admin_menu_keyboard())
+        return AdminState.MENU
 
     try:
         user_chat = await context.bot.get_chat(user_id_to_add)
-        full_name = f"{user_chat.first_name or ''} {user_chat.last_name or ''}".strip() or "N/A"
+        full_name = f"{user_chat.first_name or ''} {user_chat.last_name or ''}".strip() or "Имя не получено"
         await database.add_manager(user_id_to_add, res_code, full_name, user_chat.username)
         await set_user_commands(user_id_to_add, context.bot)
         text = f"✅ <b>{html.escape(full_name)}</b> добавлен в менеджеры «{res_name}»."
         keyboard = InlineKeyboardMarkup(
             [[InlineKeyboardButton("⬅️ Назад в меню", callback_data=settings.CALLBACK_ADMIN_BACK)]])
         await send_or_edit_message(update, context, text, keyboard)
-        logger.info(f"Admin {update.effective_user.id} added manager {user_id_to_add} to {res_code}")
+        logger.info(f"Admin {update.effective_user.id} добавил менеджера {user_id_to_add} в ресторан {res_code}")
     except (BadRequest, Forbidden) as e:
         await send_or_edit_message(update, context, f"Ошибка: не удалось найти пользователя {user_id_to_add}. {e}",
                                    get_back_to_admin_menu_keyboard())
@@ -260,7 +267,8 @@ async def add_id_received(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def _get_pending_candidates_content() -> tuple[str, InlineKeyboardMarkup]:
     pending_tasks = await database.get_all_pending_feedback()
     if not pending_tasks:
-        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data="admin_back_to_menu")]])
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("⬅️ Назад", callback_data=settings.CALLBACK_ADMIN_BACK)]])
         return "Нет кандидатов на рассмотрении.", keyboard
 
     candidates_by_restaurant = defaultdict(list)
@@ -275,7 +283,7 @@ async def _get_pending_candidates_content() -> tuple[str, InlineKeyboardMarkup]:
             button = InlineKeyboardButton(f"👤 {candidate['name']}", callback_data=f"cand_act_{candidate['id']}")
             buttons.append([button])
 
-    buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="admin_back_to_menu")])
+    buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data=settings.CALLBACK_ADMIN_BACK)])
     return "\n".join(text_parts), InlineKeyboardMarkup(buttons)
 
 

@@ -1,10 +1,13 @@
 # Virtual Environment
 .venv/
 venv/
+ven/
 
 # Python cache
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
 # IDE settings
 .idea/
@@ -12,9 +15,47 @@ __pycache__/
 # OS-specific
 .DS_Store
 
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
 # Sensitive files
 .env
-*.sqlite
-*.sqlite-journal
-bot_persistence.pkl
+.env.*
+secrets.py
+
+# Runtime files
+*.log
 logs/
+*.pid
+*.seed
+*.lock
+heartbeat.txt
+ping.txt
+
+# Database files
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+bot_persistence.pkl
+
+# Local packages folder (for offline installation)
+packages/

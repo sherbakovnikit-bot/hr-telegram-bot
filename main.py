@@ -253,17 +253,14 @@ async def main() -> None:
             AdminState.CHOOSE_ADD_RESTAURANT: [
                 CallbackQueryHandler(add_restaurant_chosen, pattern="^res_"),
                 CallbackQueryHandler(manage_managers_start, pattern="admin_manage_managers"),
-                CallbackQueryHandler(admin_panel_start, pattern=settings.CALLBACK_ADMIN_BACK),
             ],
             AdminState.AWAIT_ADD_ID: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND | filters.FORWARDED, add_id_received),
                 CallbackQueryHandler(add_manager_start, pattern="admin_add_manager_start"),
-                CallbackQueryHandler(admin_panel_start, pattern=settings.CALLBACK_ADMIN_BACK)
             ],
             AdminState.AWAIT_REMOVAL_ID: [
                 CallbackQueryHandler(remove_manager_selected, pattern="^admin_remove_mgr_"),
                 CallbackQueryHandler(manage_managers_start, pattern="admin_manage_managers"),
-                CallbackQueryHandler(admin_panel_start, pattern=settings.CALLBACK_ADMIN_BACK),
             ],
             AdminState.BROADCAST_CONFIRM: [
                 CallbackQueryHandler(handle_broadcast_confirmation,
@@ -342,8 +339,11 @@ async def main() -> None:
     await application.start()
     await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
 
-    while True:
-        await asyncio.sleep(3600)
+    await stop_event.wait()
+
+    await application.updater.stop()
+    await application.stop()
+    await application.shutdown()
 
 
 if __name__ == "__main__":
