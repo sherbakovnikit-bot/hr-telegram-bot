@@ -41,6 +41,12 @@ async def edit_admin_message(query: CallbackQuery, text: str, reply_markup: Inli
 
 
 async def admin_panel_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AdminState:
+    if update.message:
+        try:
+            await update.message.delete()
+        except (BadRequest, Forbidden):
+            pass
+
     user = update.effective_user
     keyboard = get_admin_menu_keyboard()
     text = f"Ciao, {html.escape(user.first_name)}! 👋\n\nДобро пожаловать в панель администратора. Выбери действие:"
