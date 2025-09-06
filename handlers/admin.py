@@ -296,12 +296,15 @@ async def handle_admin_delete_confirmation(update: Update, context: ContextTypes
 
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AdminState:
     query = update.callback_query
+    stats_by_res = await database.get_survey_counts_by_restaurant()
+
+    if not stats_by_res:
+        await query.answer("Статистика пока пуста.", show_alert=True)
+        return await admin_panel_start(update, context)
+
     await safe_answer_callback_query(query)
     await edit_admin_message(query, "Загрузка статистики...", None)
-    stats_by_res = await database.get_survey_counts_by_restaurant()
-    if not stats_by_res:
-        await edit_admin_message(query, "Статистика пуста.", InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Назад", callback_data=settings.CALLBACK_ADMIN_BACK)]]))
-        return AdminState.MENU
+
     res_map = {code.split('_')[-1]: name for name, code in RESTAURANT_OPTIONS}; res_map['N/A'] = "Не указан"
     survey_names = {'recruitment': 'Анкеты', 'onboarding': 'Онбординг', 'manager_feedback': 'ОС менеджера',
                     'candidate_feedback': 'ОС кандидата', 'exit': 'Exit-интервью', 'climate': 'Замер климата'}
