@@ -33,6 +33,24 @@ except ZoneInfoNotFoundError:
     TIMEZONE = ZoneInfo("UTC")
 
 
+async def cleanup_chat(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    """Удаляет последние N сообщений бота, чтобы очистить чат."""
+    message_ids = context.user_data.pop('last_bot_messages', [])
+    for msg_id in message_ids:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except (BadRequest, Forbidden):
+            pass
+
+
+def add_bot_message_to_cleanup_list(context: ContextTypes.DEFAULT_TYPE, message: Message):
+    """Добавляет ID сообщения в список для последующей очистки."""
+    if 'last_bot_messages' not in context.user_data:
+        context.user_data['last_bot_messages'] = []
+    context.user_data['last_bot_messages'].append(message.message_id)
+    context.user_data['last_bot_messages'] = context.user_data['last_bot_messages'][-5:]
+
+
 def get_now() -> datetime:
     return datetime.now(TIMEZONE)
 
@@ -81,7 +99,6 @@ async def set_user_commands(user_id: int, bot: Bot):
     elif await database.is_user_a_manager(user_id):
         commands = [BotCommand("start", "🏠 Главное меню менеджера")]
     else:
-        # Устанавливаем пустой список команд для обычных пользователей
         commands = []
 
     try:
@@ -121,20 +138,9 @@ async def safe_answer_callback_query(query: Optional[CallbackQuery]):
 async def send_transient_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str):
     try:
         message = await context.bot.send_message(chat_id=chat_id, text=text)
-        transient_msgs = context.user_data.setdefault('transient_messages', [])
-        transient_msgs.append(message.message_id)
+        add_bot_message_to_cleanup_list(context, message)
     except (Forbidden, BadRequest) as e:
         logger.warning(f"Could not send transient message to {chat_id}: {e}")
-
-
-async def cleanup_transient_messages(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    transient_msgs = context.user_data.pop('transient_messages', [])
-    for msg_id in transient_msgs:
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except (BadRequest, Forbidden) as e:
-            if "message to delete not found" not in str(e).lower():
-                logger.warning(f"Could not delete transient message {msg_id} in chat {chat_id}: {e}")
 
 
 async def send_or_edit_message(
@@ -148,8 +154,6 @@ async def send_or_edit_message(
     active_message_id = context.user_data.get(settings.ACTIVE_MESSAGE_ID_KEY)
     new_message = None
 
-    await cleanup_transient_messages(context, chat_id)
-
     if active_message_id:
         try:
             new_message = await context.bot.edit_message_text(
@@ -159,19 +163,12 @@ async def send_or_edit_message(
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.HTML
             )
-        except BadRequest as e:
-            if "Message is not modified" not in str(e).lower():
-                logger.warning(f"Could not edit message {active_message_id}, sending new one. Error: {e}")
-                active_message_id = None # Сбрасываем ID, чтобы отправить новое сообщение
-            else:
-                # Сообщение не изменилось, ничего не делаем
-                pass
-        except (Forbidden, TelegramError) as e:
-            logger.error(f"Telegram API error on edit for chat {chat_id}: {e}, sending new message.")
+        except (BadRequest, Forbidden, TelegramError):
             active_message_id = None
 
     if not active_message_id:
         try:
+            await cleanup_chat(context, chat_id)
             new_message = await context.bot.send_message(
                 chat_id, text, reply_markup=reply_markup, parse_mode=ParseMode.HTML
             )
@@ -187,19 +184,7 @@ async def send_or_edit_message(
 
     if new_message:
         context.user_data[settings.ACTIVE_MESSAGE_ID_KEY] = new_message.message_id
-
-
-async def remove_keyboard_from_previous_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
-    active_message_id = context.user_data.pop(settings.ACTIVE_MESSAGE_ID_KEY, None)
-    if active_message_id:
-        try:
-            await context.bot.edit_message_reply_markup(
-                chat_id=chat_id,
-                message_id=active_message_id,
-                reply_markup=None
-            )
-        except (BadRequest, Forbidden):
-            pass
+        add_bot_message_to_cleanup_list(context, new_message)
 
 
 async def send_new_menu_message(
@@ -208,7 +193,7 @@ async def send_new_menu_message(
         text: str,
         reply_markup: InlineKeyboardMarkup
 ):
-    await remove_keyboard_from_previous_message(context, chat_id)
+    await cleanup_chat(context, chat_id)
     try:
         new_message = await context.bot.send_message(
             chat_id=chat_id,
@@ -217,46 +202,29 @@ async def send_new_menu_message(
             parse_mode=ParseMode.HTML
         )
         context.user_data[settings.ACTIVE_MESSAGE_ID_KEY] = new_message.message_id
+        add_bot_message_to_cleanup_list(context, new_message)
     except (Forbidden, BadRequest) as e:
         logger.error(f"Failed to send new menu message to {chat_id}: {e}")
 
 
 async def get_id_from_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
     message = update.message
-
     if message.forward_origin:
         origin = message.forward_origin
-        if isinstance(origin, MessageOriginUser):
-            return origin.sender_user.id
-        if isinstance(origin, MessageOriginChannel):
-            await message.reply_text("Пожалуйста, перешлите сообщение от пользователя, а не из канала.")
-            return None
-        if isinstance(origin, MessageOriginHiddenUser):
-            await message.reply_text("Не удалось получить ID, так как пользователь скрыл свой аккаунт при пересылке. Попросите его написать боту /start и переслать его сообщение.")
-            return None
-        await message.reply_text("Этот тип пересланного сообщения не поддерживается.")
+        if isinstance(origin, MessageOriginUser): return origin.sender_user.id
+        await message.reply_text("Пожалуйста, перешлите сообщение от пользователя, а не из канала или от скрытого пользователя.")
         return None
-
     text = message.text
-    if not text:
-        await message.reply_text("Пожалуйста, отправьте текст: ID, @username или перешлите сообщение.")
-        return None
-    if text.isdigit():
-        return int(text)
+    if not text: return None
+    if text.isdigit(): return int(text)
     if text.startswith('@'):
         try:
             chat = await context.bot.get_chat(text)
-            if chat.id < 0:
-                await message.reply_text(f"Указанный {text} является группой или каналом, а не пользователем.")
-                return None
             return chat.id
-        except (BadRequest, Forbidden) as e:
-            logger.warning(f"Could not find user by username {text}: {e}")
-            await message.reply_text(f"Не удалось найти пользователя с ником {text}. Возможно, он не запускал бота.")
+        except (BadRequest, Forbidden):
+            await message.reply_text(f"Не удалось найти пользователя с ником {text}.")
             return None
-
-    await message.reply_text(
-        "Неверный формат. Пожалуйста, перешлите сообщение, введите числовой Telegram ID или @username.")
+    await message.reply_text("Неверный формат. Нужен ID, @username или пересланное сообщение.")
     return None
 
 
@@ -264,6 +232,7 @@ async def add_to_sheets_queue(queue_name: str, data: List[Any]):
     if not data: return
     try:
         await database.add_to_sheets_db_queue(queue_name, data)
+        logger.info(f"Added 1 item to GSheets queue for sheet '{queue_name}'.")
     except Exception as e:
         logger.error(f"Failed to add data to DB queue '{queue_name}': {e}", exc_info=True)
 

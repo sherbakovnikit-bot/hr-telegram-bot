@@ -113,31 +113,24 @@ async def process_batch_for_sheet(application: Application, agc_manager, sheet_n
 
 async def batch_writer_task(application: Application, stop_event: asyncio.Event, agc_manager, bot_data):
     logger.info("Batch writer task started.")
-
-    async def perform_write():
-        try:
-            batch = await database.get_sheets_queue_batch()
-            if not batch:
-                return
-
-            logger.info(f"Found {len(batch)} items in queue to write to Google Sheets.")
-            items_by_sheet = defaultdict(list)
-            for item in batch:
-                items_by_sheet[item['sheet_name']].append(item)
-
-            for sheet_name, items in items_by_sheet.items():
-                await process_batch_for_sheet(application, agc_manager, sheet_name, items)
-        except Exception as e:
-            logger.error(f"Unhandled exception in perform_write cycle: {e}", exc_info=True)
-
     while not stop_event.is_set():
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=settings.BATCH_INTERVAL)
-        except asyncio.TimeoutError:
-            await perform_write()
-        except asyncio.CancelledError:
-            break
+            batch = await database.get_sheets_queue_batch()
+            if batch:
+                logger.info(f"Found {len(batch)} items in queue to write to Google Sheets.")
+                items_by_sheet = defaultdict(list)
+                for item in batch:
+                    items_by_sheet[item['sheet_name']].append(item)
 
-    logger.info("Batch writer task stopping. Performing final write...")
-    await perform_write()
+                for sheet_name, items in items_by_sheet.items():
+                    await process_batch_for_sheet(application, agc_manager, sheet_name, items)
+
+            await asyncio.sleep(settings.BATCH_INTERVAL)
+        except asyncio.CancelledError:
+            logger.info("Batch writer task was cancelled.")
+            break
+        except Exception as e:
+            logger.error(f"Unhandled exception in batch_writer_task loop: {e}", exc_info=True)
+            await asyncio.sleep(60)
+
     logger.info("Batch writer task finished.")
