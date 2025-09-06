@@ -80,6 +80,8 @@ async def set_user_commands(user_id: int, bot: Bot):
         commands = [BotCommand("start", "⭐ Панель Администратора")]
     elif await database.is_user_a_manager(user_id):
         commands = [BotCommand("start", "🏠 Главное меню менеджера")]
+    else:
+        commands = []
 
     try:
         current_commands = await bot.get_my_commands(scope=BotCommandScopeChat(chat_id=user_id))
@@ -138,17 +140,17 @@ async def send_or_edit_message(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     text: str,
-    reply_markup: Optional[InlineKeyboardMarkup] = None,
-    delete_user_message: bool = True
+    reply_markup: Optional[InlineKeyboardMarkup] = None
 ):
     chat_id = update.effective_chat.id
+    user_message_id = update.message.message_id if update.message else None
     active_message_id = context.user_data.get(settings.ACTIVE_MESSAGE_ID_KEY)
+    new_message = None
 
     await cleanup_transient_messages(context, chat_id)
 
-    new_message = None
-    try:
-        if active_message_id:
+    if active_message_id:
+        try:
             new_message = await context.bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=active_message_id,
@@ -156,29 +158,28 @@ async def send_or_edit_message(
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.HTML
             )
-        else:
+        except BadRequest as e:
+            if "Message is not modified" not in str(e).lower():
+                logger.warning(f"Could not edit message {active_message_id}, sending new one. Error: {e}")
+                active_message_id = None
+            else:
+                pass
+        except (Forbidden, TelegramError) as e:
+            logger.error(f"Telegram API error on edit for chat {chat_id}: {e}, sending new message.")
+            active_message_id = None
+
+    if not active_message_id:
+        try:
             new_message = await context.bot.send_message(
                 chat_id, text, reply_markup=reply_markup, parse_mode=ParseMode.HTML
             )
-    except BadRequest as e:
-        if "Message is not modified" not in str(e):
-            logger.warning(f"Could not edit message {active_message_id}, sending new one. Error: {e}")
-            try:
-                new_message = await context.bot.send_message(
-                    chat_id, text, reply_markup=reply_markup, parse_mode=ParseMode.HTML
-                )
-            except (Forbidden, TelegramError) as send_e:
-                 logger.error(f"Failed to send new message to chat {chat_id} after edit failed: {send_e}")
-                 return
-        else:
-            pass
-    except (Forbidden, TelegramError) as e:
-        logger.error(f"Telegram API error for chat {chat_id}: {e}")
-        return
+        except (Forbidden, TelegramError) as send_e:
+             logger.error(f"Failed to send new message to chat {chat_id}: {send_e}")
+             return
 
-    if update.message and delete_user_message:
+    if user_message_id:
         try:
-            await update.message.delete()
+            await context.bot.delete_message(chat_id, user_message_id)
         except (BadRequest, Forbidden):
             pass
 
@@ -269,4 +270,4 @@ def format_user_for_sheets(user_id: int, full_name: str, username: Optional[str]
     display_name = full_name
     if username:
         display_name += f" (@{username})"
-    return f'=HYPERLINK("tg://user?id={user_id}"; "{display_name}")'
+    return f'=HYPERLINK("tg://user?id={user_id}"; "{display_name}")'```

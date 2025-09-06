@@ -13,10 +13,8 @@ from telegram.error import BadRequest, Forbidden
 from core import settings, database
 from utils.helpers import (
     get_user_data_from_update,
-    add_user_to_interacted,
     remove_keyboard_from_previous_message,
     send_transient_message,
-    safe_answer_callback_query,
     send_new_menu_message
 )
 
@@ -31,22 +29,31 @@ async def handle_blocked_user(user_id: int, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user_id, user_name, _ = get_user_data_from_update(update)
-    logger.info(f"User {user_name} ({user_id}) cancelled the conversation.")
+    user = update.effective_user
+    if not user:
+        return ConversationHandler.END
+
+    logger.info(f"User {user.id} ({user.full_name}) cancelled the conversation.")
 
     if context.user_data:
         context.user_data.clear()
 
     try:
-        await remove_keyboard_from_previous_message(context, user_id)
-        if update.effective_message:
-            await update.effective_message.reply_text(
-                "Действие отменено.", reply_markup=ReplyKeyboardRemove()
-            )
+        if update.callback_query:
+            await update.callback_query.answer("Действие отменено.")
+
+        from handlers.main_menu import start
+        from handlers.admin import admin_panel_start
+
+        if user.id in settings.ADMIN_IDS:
+            await admin_panel_start(update, context)
+        else:
+            await start(update, context)
+
     except Forbidden:
-        return await handle_blocked_user(user_id, context)
+        return await handle_blocked_user(user.id, context)
     except Exception as e:
-        logger.warning(f"Could not properly execute cancel for user {user_id}: {e}")
+        logger.warning(f"Could not properly execute cancel for user {user.id}: {e}")
 
     return ConversationHandler.END
 
@@ -60,30 +67,24 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
     logger.error("Exception while handling an update:", exc_info=context.error)
 
-    if update and isinstance(update, Update) and update.effective_chat:
-        try:
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="Ой, что-то пошло не по плану... 🛠️\n\nНаша команда уже получила сигнал и разбирается в ситуации. Пожалуйста, попробуй начать заново через пару минут.\n\nЕсли проблема повторяется, можно отменить действие командой /cancel."
-            )
-        except Exception as e:
-            logger.error(f"Failed to send user-facing error message: {e}")
-
     tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+    tb_string = "".join(tb_list)
+
     update_str = update.to_json() if isinstance(update, Update) else str(update)
+
     user_info = "N/A"
-    if context.user_data and 'chat_id' in context.user_data:
-        user_info = f"User/Chat ID: {context.user_data['chat_id']}"
+    if update and isinstance(update, Update) and update.effective_user:
+        user = update.effective_user
+        user_info = f"{user.full_name} (ID: {user.id}, @{user.username})"
 
     message = (
-        f"🆘 <b>Ой, в боте что-то сломалось!</b> 🆘\n\n"
+        f"🆘 <b>ОШИБКА В БОТЕ</b> 🆘\n\n"
         f"<b>Пользователь:</b> {html.escape(user_info)}\n"
-        f"<b>Тип ошибки:</b> <code>{html.escape(type(context.error).__name__)}</code>\n"
-        f"<b>Сообщение:</b>\n<pre>{html.escape(str(context.error))}</pre>\n\n"
-        f"<b>Трассировка (кратко):</b>\n"
-        f"<pre>{html.escape(''.join(tb_list[-3:]))[:1000]}</pre>\n\n"
-        f"<b>Update (сокращенно):</b>\n"
-        f"<pre>{html.escape(update_str)[:1000]}</pre>"
+        f"<b>Ошибка:</b> <code>{html.escape(str(context.error))}</code>\n\n"
+        f"<b>Traceback:</b>\n"
+        f"<pre>{html.escape(tb_string[:3500])}</pre>\n\n"
+        f"<b>Update:</b>\n"
+        f"<pre>{html.escape(update_str)[:400]}</pre>"
     )
 
     if settings.ADMIN_IDS:
@@ -92,6 +93,17 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
                 await context.bot.send_message(chat_id=admin_id, text=message, parse_mode=ParseMode.HTML)
             except Exception as e:
                 logger.critical(f"CRITICAL: Failed to send error notification to admin {admin_id}: {e}")
+
+    if update and isinstance(update, Update) and update.effective_chat:
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Ой, что-то пошло не по плану... 🛠️\n\n"
+                     "Наша команда уже получила уведомление и разбирается в ситуации. "
+                     "Пожалуйста, попробуйте начать заново с помощью команды /start."
+            )
+        except Exception as e:
+            logger.error(f"Failed to send user-facing error message to {update.effective_chat.id}: {e}")
 
 
 async def update_timestamp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
