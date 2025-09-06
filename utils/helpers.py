@@ -81,6 +81,7 @@ async def set_user_commands(user_id: int, bot: Bot):
     elif await database.is_user_a_manager(user_id):
         commands = [BotCommand("start", "🏠 Главное меню менеджера")]
     else:
+        # Устанавливаем пустой список команд для обычных пользователей
         commands = []
 
     try:
@@ -161,8 +162,9 @@ async def send_or_edit_message(
         except BadRequest as e:
             if "Message is not modified" not in str(e).lower():
                 logger.warning(f"Could not edit message {active_message_id}, sending new one. Error: {e}")
-                active_message_id = None
+                active_message_id = None # Сбрасываем ID, чтобы отправить новое сообщение
             else:
+                # Сообщение не изменилось, ничего не делаем
                 pass
         except (Forbidden, TelegramError) as e:
             logger.error(f"Telegram API error on edit for chat {chat_id}: {e}, sending new message.")
@@ -270,4 +272,4 @@ def format_user_for_sheets(user_id: int, full_name: str, username: Optional[str]
     display_name = full_name
     if username:
         display_name += f" (@{username})"
-    return f'=HYPERLINK("tg://user?id={user_id}"; "{display_name}")'```
+    return f'=HYPERLINK("tg://user?id={user_id}"; "{display_name}")'
