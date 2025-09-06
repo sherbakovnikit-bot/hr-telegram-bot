@@ -25,7 +25,7 @@ from utils.helpers import (
     send_or_edit_message,
     add_to_sheets_queue,
     get_now,
-    remove_keyboard_from_previous_message
+    cleanup_chat
 )
 from utils.keyboards import (
     RESTAURANT_OPTIONS,
@@ -107,12 +107,13 @@ async def handle_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
             [InlineKeyboardButton("Да, это связано с увольнением", callback_data=settings.CALLBACK_CONFIRM_QUIT)],
             [InlineKeyboardButton("Нет, просто вышел(а) из чата", callback_data=settings.CALLBACK_DECLINE_QUIT)],
         ])
-        await context.bot.send_message(
+        sent_message = await context.bot.send_message(
             chat_id=target_user_id,
             text="Привет! 👋 Заметили, что ты покинул(а) наш рабочий чат.\n\n"
                  "Если это связано с увольнением, мы будем очень благодарны за обратную связь. Если нет — просто нажми вторую кнопку.",
             reply_markup=keyboard
         )
+        context.user_data[settings.ACTIVE_MESSAGE_ID_KEY] = sent_message.message_id
         logger.info(f"Sent exit clarification to user {target_user_name} (ID: {target_user_id}).")
 
         context.job_queue.run_once(
@@ -143,7 +144,6 @@ async def handle_quit_clarification(update: Update, context: ContextTypes.DEFAUL
         return
 
     user_id = query.from_user.id
-    context.user_data[settings.ACTIVE_MESSAGE_ID_KEY] = query.message.message_id
 
     if query.data == settings.CALLBACK_CONFIRM_QUIT:
         keyboard = InlineKeyboardMarkup(
@@ -167,6 +167,8 @@ async def start_exit_interview_callback(update: Update, context: ContextTypes.DE
     context.user_data.clear()
     context.user_data['_in_exit_interview'] = True
     context.user_data['chat_id'] = query.message.chat_id
+    context.user_data[settings.ACTIVE_MESSAGE_ID_KEY] = query.message.message_id
+
 
     await send_or_edit_message(update, context, "Спасибо тебе за готовность помочь! 🙏 Давай начнем.", None)
 
