@@ -7,7 +7,7 @@ import requests
 import json
 from collections import defaultdict
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from typing import List, Any, Tuple
+from typing import List, Any
 
 from google.oauth2.service_account import Credentials
 from telegram.ext import Application
@@ -63,8 +63,8 @@ async def init_google_sheets_client() -> gspread_asyncio.AsyncioGspreadClientMan
         await client.open_by_key(settings.SPREADSHEET_ID)
         logger.info("Google Sheets client initialized and spreadsheet access verified.")
         return agc_manager
-    except json.JSONDecodeError:
-        logger.error("Failed to parse GOOGLE_CREDENTIALS_JSON. Make sure it's a valid JSON string.")
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse GOOGLE_CREDENTIALS_JSON. It might be malformed. Error: {e}")
     except Exception as e:
         logger.error(f"Unexpected error initializing Google Sheets client: {e}", exc_info=True)
     return None
@@ -115,16 +115,20 @@ async def batch_writer_task(application: Application, stop_event: asyncio.Event,
     logger.info("Batch writer task started.")
 
     async def perform_write():
-        batch = await database.get_sheets_queue_batch()
-        if not batch:
-            return
+        try:
+            batch = await database.get_sheets_queue_batch()
+            if not batch:
+                return
 
-        items_by_sheet = defaultdict(list)
-        for item in batch:
-            items_by_sheet[item['sheet_name']].append(item)
+            logger.info(f"Found {len(batch)} items in queue to write to Google Sheets.")
+            items_by_sheet = defaultdict(list)
+            for item in batch:
+                items_by_sheet[item['sheet_name']].append(item)
 
-        for sheet_name, items in items_by_sheet.items():
-            await process_batch_for_sheet(application, agc_manager, sheet_name, items)
+            for sheet_name, items in items_by_sheet.items():
+                await process_batch_for_sheet(application, agc_manager, sheet_name, items)
+        except Exception as e:
+            logger.error(f"Unhandled exception in perform_write cycle: {e}", exc_info=True)
 
     while not stop_event.is_set():
         try:
