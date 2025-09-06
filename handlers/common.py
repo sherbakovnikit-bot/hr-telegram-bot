@@ -14,7 +14,8 @@ from core import settings, database
 from utils.helpers import (
     get_user_data_from_update,
     send_new_menu_message,
-    cleanup_chat
+    cleanup_chat,
+    send_transient_message  # Возвращаем импорт
 )
 
 
