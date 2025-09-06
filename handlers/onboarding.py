@@ -23,7 +23,7 @@ from utils.helpers import (
     add_user_to_interacted,
     get_now,
     format_user_for_sheets,
-    remove_keyboard_from_previous_message
+    cleanup_chat
 )
 from utils.keyboards import (
     RESTAURANT_OPTIONS,
@@ -41,6 +41,7 @@ async def start_onboarding_flow(update: Update, context: ContextTypes.DEFAULT_TY
     user_id, user_name, _ = get_user_data_from_update(update)
     await add_user_to_interacted(user_id, context)
     context.user_data.clear()
+    context.user_data['conversations'] = {'onboarding_conv': True}
 
     logger.info(f"User {user_name} ({user_id}) started onboarding flow.")
 
@@ -48,11 +49,14 @@ async def start_onboarding_flow(update: Update, context: ContextTypes.DEFAULT_TY
     restaurant_name = "Не указан"
 
     if update.callback_query:
+        await update.callback_query.message.delete()
+
+    if update.callback_query:
         restaurant_code = await database.get_candidate_restaurant(user_id) or ""
         restaurant_name = next((name for name, code in RESTAURANT_OPTIONS if code.endswith(restaurant_code)),
                                "Не указан")
-    else:
-        param = context.args[0] if context.args else ""
+    elif context.args:
+        param = context.args[0]
         if not param or not param.startswith("onboard_"):
             if update.message:
                 await update.message.reply_text("Ошибка в ссылке. Пожалуйста, обратитесь к менеджеру.")
@@ -71,9 +75,8 @@ async def start_onboarding_flow(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data['onboarding_restaurant_code'] = restaurant_code
     context.user_data['chat_id'] = update.effective_chat.id
 
-    if not update.callback_query:
-        await context.bot.send_sticker(chat_id=user_id, sticker=stickers.GREETING_TEAM)
-        await asyncio.sleep(0.5)
+    await context.bot.send_sticker(chat_id=user_id, sticker=stickers.GREETING_TEAM)
+    await asyncio.sleep(0.5)
 
     keyboard = build_inline_keyboard(ONBOARDING_POSITION_OPTIONS, columns=2)
     message_text = (
@@ -83,9 +86,7 @@ async def start_onboarding_flow(update: Update, context: ContextTypes.DEFAULT_TY
         "<b>Шаг 1/4:</b> Напомни, пожалуйста, на какую должность ты к нам присоединился(ась)?"
     )
 
-    sent_message = await update.effective_message.reply_text(message_text, parse_mode=ParseMode.HTML,
-                                                             reply_markup=keyboard)
-    context.user_data[settings.ACTIVE_MESSAGE_ID_KEY] = sent_message.message_id
+    await send_or_edit_message(update, context, message_text, keyboard)
 
     return OnboardingState.POSITION
 
@@ -153,6 +154,8 @@ async def interest_rating_received(update: Update, context: ContextTypes.DEFAULT
 
 async def interest_reason_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["onboarding_interest_reason"] = update.message.text.strip()
+    await send_or_edit_message(update, context, "Обрабатываем твой ответ...")
+
     user_id, user_name, _ = get_user_data_from_update(update)
     user = update.effective_user
     data = context.user_data
@@ -172,14 +175,13 @@ async def interest_reason_received(update: Update, context: ContextTypes.DEFAULT
     await add_to_sheets_queue(settings.ONBOARDING_SHEET_NAME, row_data)
     await database.log_survey_completion('onboarding', user_id, restaurant_code)
 
-    # --- Start: Notify Admins ---
     interest_level_str = data.get("onboarding_interest_level", "0")
     message_title = "📝 <b>Новый отзыв после ознакомительной смены</b>"
     try:
         if int(interest_level_str) < 6:
             message_title = f"❗️🚩 <b>Низкая заинтересованность после смены! ({interest_level_str}/10)</b>"
     except (ValueError, TypeError):
-        pass  # If conversion fails, use the default title
+        pass
 
     admin_message = (
         f"{message_title}\n\n"
@@ -194,18 +196,11 @@ async def interest_reason_received(update: Update, context: ContextTypes.DEFAULT
     if settings.ADMIN_IDS:
         for admin_id in settings.ADMIN_IDS:
             try:
-                await context.bot.send_message(
-                    chat_id=admin_id,
-                    text=admin_message,
-                    parse_mode=ParseMode.HTML
-                )
+                await context.bot.send_message(chat_id=admin_id, text=admin_message, parse_mode=ParseMode.HTML)
             except Exception as e:
                 logger.error(f"Failed to send onboarding feedback summary to admin {admin_id}: {e}")
-    # --- End: Notify Admins ---
 
-
-    await send_or_edit_message(update, context, "Обрабатываем твой ответ...")
-    await remove_keyboard_from_previous_message(context, user_id)
+    await cleanup_chat(context, user_id)
 
     position = "Другое" if is_other_position else data.get("onboarding_position", "сотрудника")
     links_data = POSITION_LINKS.get(position, [])
