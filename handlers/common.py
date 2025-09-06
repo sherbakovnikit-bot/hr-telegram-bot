@@ -13,9 +13,8 @@ from telegram.error import BadRequest, Forbidden
 from core import settings, database
 from utils.helpers import (
     get_user_data_from_update,
-    remove_keyboard_from_previous_message,
-    send_transient_message,
-    send_new_menu_message
+    send_new_menu_message,
+    cleanup_chat
 )
 
 
@@ -35,13 +34,15 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     logger.info(f"User {user.id} ({user.full_name}) cancelled the conversation.")
 
+    if update.callback_query:
+        await update.callback_query.answer("Действие отменено.")
+
+    await cleanup_chat(context, user.id)
+
     if context.user_data:
         context.user_data.clear()
 
     try:
-        if update.callback_query:
-            await update.callback_query.answer("Действие отменено.")
-
         from handlers.main_menu import start
         from handlers.admin import admin_panel_start
 
