@@ -59,7 +59,7 @@ async def manage_managers_start(update: Update, context: ContextTypes.DEFAULT_TY
     await safe_answer_callback_query(query)
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("➕ Добавить менеджера", callback_data="admin_add_manager_start")],
-        [InlineKeyboardButton("➖ Удалить менеджера", callback_data="admin_remove_manager_start")],
+        [InlineKeyboardButton("➖ Удалить менеджера (со списком)", callback_data="admin_remove_manager_start")],
         [InlineKeyboardButton("⬅️ Назад", callback_data=settings.CALLBACK_ADMIN_BACK)],
     ])
     text = "Управление менеджерами:"
@@ -153,21 +153,6 @@ async def get_manager_info_text() -> str:
     return "\n".join(report_parts)
 
 
-async def list_managers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AdminState:
-    query = update.callback_query
-    await safe_answer_callback_query(query)
-
-    await edit_admin_message(query, "Загрузка...", None)
-
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage_managers")]
-    ])
-    managers_text = await get_manager_info_text()
-    await edit_admin_message(query, managers_text, keyboard)
-
-    return AdminState.MANAGE_MANAGERS
-
-
 async def remove_manager_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> AdminState:
     query = update.callback_query
     await safe_answer_callback_query(query)
@@ -180,6 +165,10 @@ async def remove_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
         return await manage_managers_start(update, context)
 
     buttons = []
+
+    managers_text = await get_manager_info_text()
+    text_parts = [managers_text, "\n\nВыберите менеджера для удаления:"]
+
     for res_code_suffix, managers in sorted(managers_map.items()):
         res_name = next((name for name, code in RESTAURANT_OPTIONS if code.endswith(res_code_suffix)), res_code_suffix)
         for manager in managers:
@@ -190,7 +179,7 @@ async def remove_manager_start(update: Update, context: ContextTypes.DEFAULT_TYP
     buttons.append([
         InlineKeyboardButton("⬅️ Назад", callback_data="admin_manage_managers"),
     ])
-    await edit_admin_message(query, "Выберите менеджера для удаления:", InlineKeyboardMarkup(buttons))
+    await edit_admin_message(query, "\n".join(text_parts), InlineKeyboardMarkup(buttons))
     return AdminState.AWAIT_REMOVAL_ID
 
 
@@ -320,7 +309,6 @@ async def handle_candidate_action_menu(update: Update, context: ContextTypes.DEF
     text = f"Действия для кандидата:\n<b>{html.escape(candidate_name)}</b>"
 
     keyboard = InlineKeyboardMarkup([
-        # Эта кнопка перебросит в другой ConversationHandler
         [InlineKeyboardButton("✍️ Оставить ОС", callback_data=f"fb_{feedback_id}")],
         [InlineKeyboardButton("❌ Удалить", callback_data=f"cand_del_{feedback_id}")],
         [InlineKeyboardButton("⬅️ Назад к списку", callback_data="admin_pending_candidates")]

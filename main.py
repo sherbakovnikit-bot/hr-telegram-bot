@@ -36,7 +36,7 @@ from handlers.climate_survey import climate_survey_conversation_handler
 from handlers.bot_feedback import feedback_submission_handler
 from handlers.manager import manager_registration_handler, handle_manager_approval
 from handlers.admin import (
-    list_managers, add_manager_start, remove_manager_start,
+    add_manager_start, remove_manager_start,
     broadcast_climate_start, admin_panel_start, add_restaurant_chosen,
     add_id_received, handle_broadcast_confirmation,
     show_stats, admin_list_pending_candidates, remove_manager_selected,
@@ -206,7 +206,6 @@ async def main() -> None:
             AdminState.MANAGE_MANAGERS: [
                 CallbackQueryHandler(add_manager_start, pattern="admin_add_manager_start"),
                 CallbackQueryHandler(remove_manager_start, pattern="admin_remove_manager_start"),
-                CallbackQueryHandler(list_managers, pattern="admin_list_managers"),
                 CallbackQueryHandler(admin_panel_start, pattern=settings.CALLBACK_ADMIN_BACK),
             ],
             AdminState.CHOOSE_EMPLOYEE_RESTAURANT: [

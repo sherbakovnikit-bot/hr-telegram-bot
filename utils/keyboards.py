@@ -165,8 +165,7 @@ POSITION_LINKS: Dict[str, List[Dict[str, str]]] = {
 
 def get_admin_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Список менеджеров", callback_data="admin_list_managers")],
-        [InlineKeyboardButton("➕ Добавить/➖ Удалить менеджера", callback_data="admin_manage_managers")],
+        [InlineKeyboardButton("➕/➖ Управление менеджерами", callback_data="admin_manage_managers")],
         [InlineKeyboardButton("👥 Управление сотрудниками", callback_data="admin_manage_employees")],
         [InlineKeyboardButton("🤔 Кандидаты на рассмотрении", callback_data="admin_pending_candidates")],
         [InlineKeyboardButton("📊 Запустить замер климата",
