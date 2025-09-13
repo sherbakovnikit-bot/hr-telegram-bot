@@ -1,0 +1,27 @@
+cat << EOF > .gitignore
+# Virtual Environment
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE & OS
+.idea/
+.DS_Store
+
+# Sensitive files
+.env
+credentials.json
+
+# Runtime files
+*.log
+logs/
+*.pid
+*.txt
+
+# Deployment artifacts
+offline_packages/
+*.tar.gz
+EOF

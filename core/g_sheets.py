@@ -1,0 +1,166 @@
+import asyncio
+import gspread
+import gspread_asyncio
+import html
+import logging
+import requests
+import json
+from collections import defaultdict
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from typing import List, Any
+from datetime import datetime
+
+from google.oauth2.service_account import Credentials
+from telegram.ext import Application, ContextTypes
+from telegram.constants import ParseMode
+
+from core import settings, database
+from utils.helpers import TIMEZONE
+
+logger = logging.getLogger(__name__)
+
+GSPREAD_RETRY_ERRORS = (
+    gspread.exceptions.APIError,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.RequestException,
+    gspread.exceptions.GSpreadException,
+    TimeoutError,
+)
+
+MAX_WRITE_ATTEMPTS = 3
+
+retry_gspread_operation = retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=10, max=60),
+    retry=retry_if_exception_type(GSPREAD_RETRY_ERRORS),
+    reraise=True,
+    before_sleep=lambda retry_state: logger.warning(
+        f"Retrying GSheets operation (attempt {retry_state.attempt_number}) due to: {retry_state.outcome.exception()}"
+    )
+)
+
+
+async def init_google_sheets_client() -> gspread_asyncio.AsyncioGspreadClientManager | None:
+    logger.info("Attempting to initialize Google Sheets client from file...")
+    if not settings.GOOGLE_CREDENTIALS_FILE.exists():
+        logger.error(f"CRITICAL - Credentials file not found at {settings.GOOGLE_CREDENTIALS_FILE}.")
+        return None
+    if not settings.SPREADSHEET_ID:
+        logger.error("CRITICAL - SPREADSHEET_ID is not set.")
+        return None
+
+    try:
+        scope = [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds = Credentials.from_service_account_file(settings.GOOGLE_CREDENTIALS_FILE, scopes=scope)
+        agc_manager = gspread_asyncio.async_gspread_client_manager(lambda: creds)
+        client = await agc_manager.authorize()
+        await client.open_by_key(settings.SPREADSHEET_ID)
+        logger.info("Google Sheets client initialized and spreadsheet access verified successfully.")
+        return agc_manager
+    except Exception as e:
+        logger.error(f"CRITICAL - Error initializing client from file: {e}", exc_info=True)
+    return None
+
+
+@retry_gspread_operation
+async def append_rows_to_sheet(worksheet: gspread_asyncio.AsyncioGspreadWorksheet, data: List[List[Any]]):
+    if not data:
+        return
+    await worksheet.append_rows(data, value_input_option='USER_ENTERED')
+    logger.info(f"SUCCESS: Appended {len(data)} rows to sheet '{worksheet.title}'.")
+
+
+async def process_batch_for_sheet(application: Application, agc_manager, sheet_name: str, items: List[dict]):
+    item_ids = [item['id'] for item in items]
+    data_to_write = [json.loads(item['data_json']) for item in items]
+
+    try:
+        client = await agc_manager.authorize()
+        spreadsheet = await client.open_by_key(settings.SPREADSHEET_ID)
+        worksheet = await spreadsheet.worksheet(sheet_name)
+        await append_rows_to_sheet(worksheet, data_to_write)
+        await database.mark_sheets_queue_items_processed(item_ids)
+    except Exception as e:
+        logger.error(f"Failed to write batch to '{sheet_name}': {e}. Incrementing attempts.", exc_info=True)
+        await database.increment_sheets_queue_attempts(item_ids)
+        if settings.ADMIN_IDS:
+            message = f"🚨 <b>ОШИБКА GOOGLE SHEETS</b> 🚨\nНе удалось записать данные в лист <b>'{html.escape(sheet_name)}'</b>.\n<b>Ошибка:</b> <pre>{html.escape(str(e))[:1000]}</pre>"
+            for admin_id in settings.ADMIN_IDS:
+                try:
+                    await application.bot.send_message(admin_id, message, parse_mode=ParseMode.HTML)
+                except Exception as notify_err:
+                    logger.error(f"Failed to notify admin {admin_id}: {notify_err}")
+
+
+async def sheets_writer_job(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("--- GSheets Writer Job triggered! ---")
+    agc_manager = context.application.bot_data.get('agc_manager')
+
+    if not agc_manager:
+        logger.warning("sheets_writer_job: agc_manager not found in bot_data. Skipping run.")
+        return
+
+    application = context.application
+
+    try:
+        batch = await database.get_sheets_queue_batch()
+        if not batch:
+            logger.info("No items found in the database queue. Job finished.")
+            return
+
+        logger.info(f"Found {len(batch)} items in queue to write to Google Sheets.")
+        items_by_sheet = defaultdict(list)
+        for item in batch:
+            items_by_sheet[item['sheet_name']].append(item)
+
+        logger.info(f"Grouped items into {len(items_by_sheet)} sheets.")
+
+        tasks = [
+            process_batch_for_sheet(application, agc_manager, sheet_name, items)
+            for sheet_name, items in items_by_sheet.items()
+        ]
+        await asyncio.gather(*tasks)
+        logger.info("Finished processing all batches for this run.")
+
+    except Exception as e:
+        logger.error(f"Unhandled exception in sheets_writer_job: {e}", exc_info=True)
+
+
+async def test_google_sheets_connection(context: ContextTypes.DEFAULT_TYPE):
+    logger.info("--- Running manual Google Sheets connection test ---")
+    agc_manager = context.application.bot_data.get('agc_manager')
+    admin_id = next(iter(settings.ADMIN_IDS))
+
+    if not agc_manager:
+        logger.error("Test failed: agc_manager not found in bot_data.")
+        await context.bot.send_message(admin_id, "❌ Тест провален: agc_manager не найден в bot_data.")
+        return
+
+    try:
+        client = await agc_manager.authorize()
+        spreadsheet = await client.open_by_key(settings.SPREADSHEET_ID)
+
+        try:
+            worksheet = await spreadsheet.worksheet("Тест")
+        except gspread.exceptions.WorksheetNotFound:
+            logger.warning("Test sheet not found, creating it.")
+            worksheet = await spreadsheet.add_worksheet(title="Тест", rows=10, cols=10)
+
+        test_data = [
+            "Тестовая запись",
+            datetime.now(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+        ]
+
+        await worksheet.append_row(test_data, value_input_option='USER_ENTERED')
+
+        logger.info("--- Test successful: data written to 'Тест' sheet. ---")
+        await context.bot.send_message(admin_id, "✅ Тест пройден! Данные успешно записаны в лист 'Тест'.")
+
+    except Exception as e:
+        logger.error(f"--- Test failed with exception: {e} ---", exc_info=True)
+        error_message = f"❌ Тест провален! Произошла ошибка:\n<pre>{html.escape(str(e))}</pre>"
+        await context.bot.send_message(admin_id, error_message, parse_mode=ParseMode.HTML)
